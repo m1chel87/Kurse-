@@ -35,6 +35,17 @@ svg.spark{width:100%;height:56px;display:block;margin-top:10px}
 .btn{border:1px solid var(--line);background:var(--card);color:var(--text);border-radius:10px;padding:8px 14px;font:600 14px inherit;font-family:inherit;cursor:pointer}
 .err{background:color-mix(in srgb,var(--down) 12%,transparent);color:var(--down);border-radius:12px;padding:10px 12px;font-size:14px;margin-bottom:12px;display:none}
 .skel{color:var(--muted)}
+.sec{font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:22px 4px 8px;display:flex;justify-content:space-between}
+.sec span{text-transform:none;letter-spacing:0;font-weight:400}
+.list{background:var(--card);border:1px solid var(--line);border-radius:16px;overflow:hidden}
+.row{display:grid;grid-template-columns:minmax(0,1fr) 64px auto;gap:10px;align-items:center;padding:12px 14px;border-top:1px solid var(--line)}
+.row:first-child{border-top:0}
+.row .n{font-weight:600;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .i{color:var(--muted);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .p{text-align:right;font-variant-numeric:tabular-nums;font-weight:600;font-size:15px}
+.row .c{text-align:right;font-size:13px;font-variant-numeric:tabular-nums}
+.row svg{width:64px;height:28px;display:block}
+.stale{opacity:.55}
 </style>
 </head>
 <body>
@@ -46,7 +57,10 @@ svg.spark{width:100%;height:56px;display:block;margin-top:10px}
     </div>
   </header>
   <div class="err" id="err"></div>
+  <div class="sec">Krypto <span id="cupd"></span></div>
   <div id="cards"></div>
+  <div class="sec">Aktien, ETFs &amp; Fonds <span id="supd"></span></div>
+  <div class="list" id="stocks"><div class="row"><div class="i">Lade …</div></div></div>
   <div class="foot">
     <div><div id="updated">Lade …</div><div id="next"></div></div>
     <button class="btn" id="refresh">Aktualisieren</button>
@@ -129,8 +143,53 @@ $("cur").onclick=e=>{
   const b=e.target.closest("button");if(!b||b.dataset.c===cur)return;
   cur=b.dataset.c;
   document.querySelectorAll("#cur button").forEach(x=>x.classList.toggle("on",x===b));
-  load();
+  load();renderQuotes();
 };
+
+// ---------- Wertpapiere (data/quotes.json, alle 30 Min. per GitHub Actions) ----------
+let quotes=null;
+function quoteUrls(){
+  const u=[],h=location.hostname,seg=location.pathname.split("/").filter(Boolean);
+  if(h.endsWith(".github.io")){
+    const owner=h.split(".")[0],repo=seg.length&&!seg[0].includes(".")?seg[0]:h;
+    u.push(`https://raw.githubusercontent.com/${owner}/${repo}/main/data/quotes.json?t=${Date.now()}`);
+  }
+  u.push(`data/quotes.json?t=${Date.now()}`);
+  return u;
+}
+async function loadQuotes(){
+  for(const url of quoteUrls()){
+    try{const r=await fetch(url,{cache:"no-store"});if(!r.ok)continue;quotes=await r.json();renderQuotes();return}catch(e){}
+  }
+  $("stocks").innerHTML='<div class="row"><div class="i">Wertpapierkurse noch nicht verfügbar – läuft die GitHub-Action schon?</div></div>';
+}
+function conv(v,from){
+  const fx=quotes&&quotes.fx;if(!fx)return from===cur.toUpperCase()?v:null;
+  const f=fx[from],t=fx[cur.toUpperCase()];if(!f||!t)return null;
+  return v/f*t;
+}
+function mini(h){
+  if(!h||h.length<2)return"<svg></svg>";
+  const a=h.map(p=>p[1]),w=64,H=28,min=Math.min(...a),max=Math.max(...a),r=max-min||1;
+  const d=a.map((v,i)=>(i?"L":"M")+(i/(a.length-1)*w).toFixed(1)+" "+(H-2-(v-min)/r*(H-4)).toFixed(1)).join(" ");
+  const col=a[a.length-1]>=a[0]?"var(--up)":"var(--down)";
+  return `<svg viewBox="0 0 ${w} ${H}" preserveAspectRatio="none"><path d="${d}" fill="none" stroke="${col}" stroke-width="1.6" vector-effect="non-scaling-stroke"/></svg>`;
+}
+function renderQuotes(){
+  if(!quotes)return;
+  $("stocks").innerHTML=quotes.items.map(x=>{
+    if(x.price==null)return `<div class="row"><div><div class="n">${x.name}</div><div class="i">${x.isin} · kein Kurs</div></div><div></div><div></div></div>`;
+    const v=conv(x.price,x.currency);
+    const shown=v!=null?fmt(v):new Intl.NumberFormat("de-DE",{style:"currency",currency:x.currency}).format(x.price);
+    const ch=x.prev?(x.price/x.prev-1)*100:null;
+    const t=new Date(x.time*1000).toLocaleString("de-DE",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"});
+    return `<div class="row${x.stale?" stale":""}"><div><div class="n">${x.name}</div><div class="i">${x.isin} · ${t}</div></div>${mini(x.history)}<div><div class="p">${shown}</div><div class="c">${pct(ch)}</div></div></div>`;
+  }).join("");
+  $("supd").textContent=quotes.updated?"Stand "+new Date(quotes.updated*1000).toLocaleTimeString("de-DE",{hour:"2-digit",minute:"2-digit"}):"";
+}
+setInterval(loadQuotes,INTERVAL);
+document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible")loadQuotes()});
+loadQuotes();
 load();
 if("serviceWorker" in navigator && location.protocol==="https:")navigator.serviceWorker.register("sw.js").catch(()=>{});
 </script>
