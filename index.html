@@ -46,6 +46,26 @@ svg.spark{width:100%;height:56px;display:block;margin-top:10px}
 .row .c{text-align:right;font-size:13px;font-variant-numeric:tabular-nums}
 .row svg{width:64px;height:28px;display:block}
 .stale{opacity:.55}
+.tap{cursor:pointer;-webkit-tap-highlight-color:transparent;transition:transform .12s}
+.tap:active{transform:scale(.985)}
+#det{position:fixed;inset:0;background:var(--bg);z-index:10;display:none;flex-direction:column;padding:calc(env(safe-area-inset-top) + 12px) 16px calc(env(safe-area-inset-bottom) + 16px);overflow-y:auto}
+#det.open{display:flex}
+.dh{display:flex;align-items:center;gap:10px;max-width:720px;width:100%;margin:0 auto}
+.back{border:0;background:var(--card);border:1px solid var(--line);color:var(--text);width:40px;height:40px;border-radius:12px;font-size:20px;line-height:1;cursor:pointer;flex:none}
+.dt{min-width:0}.dt .name{font-size:18px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dbody{max-width:720px;width:100%;margin:0 auto}
+.dp{font-size:34px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-.02em;margin-top:18px}
+.dc{font-size:15px;font-variant-numeric:tabular-nums;min-height:22px}
+.dc .l{color:var(--muted)}
+.chart{position:relative;margin-top:14px;height:min(52vh,380px);touch-action:pan-y}
+.chart svg{width:100%;height:100%;display:block;overflow:visible}
+.chart .msg{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:14px;text-align:center;padding:0 20px}
+.axis{font-size:11px;fill:var(--muted);font-variant-numeric:tabular-nums}
+.grid{stroke:var(--line);stroke-width:1}
+.ranges{display:flex;gap:6px;margin-top:16px}
+.ranges button{flex:1;border:1px solid var(--line);background:var(--card);color:var(--muted);font:600 14px inherit;font-family:inherit;padding:10px 0;border-radius:10px;cursor:pointer}
+.ranges button.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.dmeta{color:var(--muted);font-size:13px;margin-top:14px}
 </style>
 </head>
 <body>
@@ -64,6 +84,18 @@ svg.spark{width:100%;height:56px;display:block;margin-top:10px}
   <div class="foot">
     <div><div id="updated">Lade …</div><div id="next"></div></div>
     <button class="btn" id="refresh">Aktualisieren</button>
+  </div>
+</div>
+<div id="det" role="dialog" aria-modal="true">
+  <div class="dh"><button class="back" id="dback" aria-label="Zurück">‹</button><div class="dt"><div class="name" id="dname"></div><div class="sym" id="dsym"></div></div></div>
+  <div class="dbody">
+    <div class="dp" id="dprice"></div>
+    <div class="dc" id="dchg"></div>
+    <div class="chart" id="dchart"></div>
+    <div class="ranges" id="dranges">
+      <button data-r="h">Std.</button><button data-r="d">Tag</button><button data-r="w">Woche</button><button data-r="m">Monat</button><button data-r="y">Jahr</button>
+    </div>
+    <div class="dmeta" id="dmeta"></div>
   </div>
 </div>
 <script>
@@ -100,7 +132,7 @@ function render(data){
     const x=data.find(d=>d.id===c.id);
     if(!x)return `<div class="card"><div class="name">${c.name}</div><div class="skel">keine Daten</div></div>`;
     const c24=x.price_change_percentage_24h_in_currency,c7=x.price_change_percentage_7d_in_currency;
-    return `<div class="card">
+    return `<div class="card tap" data-coin="${c.id}">
       <div class="top"><div><div class="name">${c.name}</div><div class="sym">${c.sym}</div></div></div>
       <div class="price">${fmt(x.current_price)}</div>
       <div class="chg"><span><span class="l">24 h </span>${pct(c24)}</span><span><span class="l">7 T </span>${pct(c7)}</span></div>
@@ -143,7 +175,7 @@ $("cur").onclick=e=>{
   const b=e.target.closest("button");if(!b||b.dataset.c===cur)return;
   cur=b.dataset.c;
   document.querySelectorAll("#cur button").forEach(x=>x.classList.toggle("on",x===b));
-  load();renderQuotes();
+  load();renderQuotes();if(det)showRange();
 };
 
 // ---------- Wertpapiere (data/quotes.json, alle 30 Min. per GitHub Actions) ----------
@@ -169,6 +201,7 @@ function conv(v,from){
   return v/f*t;
 }
 function mini(h){
+  if(h&&h.length){const c=h[h.length-1][0]-7*86400;h=h.filter(p=>p[0]>=c)}
   if(!h||h.length<2)return"<svg></svg>";
   const a=h.map(p=>p[1]),w=64,H=28,min=Math.min(...a),max=Math.max(...a),r=max-min||1;
   const d=a.map((v,i)=>(i?"L":"M")+(i/(a.length-1)*w).toFixed(1)+" "+(H-2-(v-min)/r*(H-4)).toFixed(1)).join(" ");
@@ -183,13 +216,130 @@ function renderQuotes(){
     const shown=v!=null?fmt(v):new Intl.NumberFormat("de-DE",{style:"currency",currency:x.currency}).format(x.price);
     const ch=x.prev?(x.price/x.prev-1)*100:null;
     const t=new Date(x.time*1000).toLocaleString("de-DE",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"});
-    return `<div class="row${x.stale?" stale":""}"><div><div class="n">${x.name}</div><div class="i">${x.isin} · ${t}</div></div>${mini(x.history)}<div><div class="p">${shown}</div><div class="c">${pct(ch)}</div></div></div>`;
+    return `<div class="row tap${x.stale?" stale":""}" data-isin="${x.isin}"><div><div class="n">${x.name}</div><div class="i">${x.isin} · ${t}</div></div>${mini(x.history)}<div><div class="p">${shown}</div><div class="c">${pct(ch)}</div></div></div>`;
   }).join("");
   $("supd").textContent=quotes.updated?"Stand "+new Date(quotes.updated*1000).toLocaleTimeString("de-DE",{hour:"2-digit",minute:"2-digit"}):"";
 }
 setInterval(loadQuotes,INTERVAL);
 document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible")loadQuotes()});
 loadQuotes();
+
+// ---------- Detailansicht ----------
+const RANGE_TXT={h:"1 Stunde",d:"24 Stunden",w:"7 Tage",m:"1 Monat",y:"1 Jahr"};
+let det=null,range="d",cryptoData=[],chartsJson=null,chartsAt=0;
+const ccache={};
+const _render=render;render=function(d){cryptoData=d;_render(d)};
+
+async function cryptoSeries(id,r){
+  const days={h:1,d:1,w:7,m:30,y:365}[r],key=id+"|"+cur+"|"+days;
+  let c=ccache[key];
+  if(!c||Date.now()-c.at>5*60*1000){
+    const res=await fetch(`https://api.coingecko.com/api/v3/coins/${id}/market_chart?vs_currency=${cur}&days=${days}`);
+    if(!res.ok)throw new Error("HTTP "+res.status);
+    c=ccache[key]={at:Date.now(),pts:(await res.json()).prices||[]};
+  }
+  let pts=c.pts;
+  if(r==="h"&&pts.length){const cut=pts[pts.length-1][0]-3600e3;pts=pts.filter(p=>p[0]>=cut)}
+  return pts;
+}
+async function loadCharts(){
+  if(chartsJson&&Date.now()-chartsAt<5*60*1000)return chartsJson;
+  for(const u of quoteUrls().map(x=>x.replace("quotes.json","charts.json"))){
+    try{const r=await fetch(u,{cache:"no-store"});if(r.ok){chartsJson=await r.json();chartsAt=Date.now();return chartsJson}}catch(e){}
+  }
+  throw new Error("charts.json nicht erreichbar");
+}
+async function stockSeries(isin,r){
+  const ch=((await loadCharts()).assets||{})[isin]||{},x=quotes.items.find(i=>i.isin===isin);
+  let pts=ch[r==="h"?"d":r]||[];
+  if(r==="h"&&pts.length){const cut=pts[pts.length-1][0]-3600;pts=pts.filter(p=>p[0]>=cut)}
+  return pts.map(p=>[p[0]*1000,conv(p[1],x.currency)??p[1]]);
+}
+
+function fmtT(ms,r){
+  const d=new Date(ms);
+  if(r==="h"||r==="d")return d.toLocaleTimeString("de-DE",{hour:"2-digit",minute:"2-digit"});
+  if(r==="w")return d.toLocaleDateString("de-DE",{weekday:"short"})+" "+d.toLocaleTimeString("de-DE",{hour:"2-digit",minute:"2-digit"});
+  if(r==="m")return d.toLocaleDateString("de-DE",{day:"2-digit",month:"2-digit"});
+  return d.toLocaleDateString("de-DE",{month:"short",year:"2-digit"});
+}
+function fmtFull(ms){return new Date(ms).toLocaleString("de-DE",{day:"2-digit",month:"2-digit",year:"numeric",hour:"2-digit",minute:"2-digit"})}
+
+function setHead(price,first){
+  $("dprice").textContent=price!=null?fmt(price):"–";
+  const ch=first?(price/first-1)*100:null;
+  $("dchg").innerHTML=ch==null?"":`${pct(ch)} <span class="l">· ${RANGE_TXT[range]}</span>`;
+}
+
+function drawChart(pts){
+  const box=$("dchart");
+  if(!pts||pts.length<2){box.innerHTML='<div class="msg">Für diesen Zeitraum liegen noch keine Daten vor.</div>';setHead(det.price,null);return}
+  const W=box.clientWidth,H=box.clientHeight,pl=4,pr=58,pt=10,pb=24;
+  const xs=pts.map(p=>p[0]),ys=pts.map(p=>p[1]);
+  const x0=xs[0],x1=xs[xs.length-1],lo=Math.min(...ys),hi=Math.max(...ys),pad=(hi-lo||hi*.01||1)*.08;
+  const y0=lo-pad,y1=hi+pad;
+  const X=t=>pl+(t-x0)/(x1-x0||1)*(W-pl-pr),Y=v=>pt+(1-(v-y0)/(y1-y0))*(H-pt-pb);
+  const up=ys[ys.length-1]>=ys[0],col=up?"var(--up)":"var(--down)";
+  const d=pts.map((p,i)=>(i?"L":"M")+X(p[0]).toFixed(1)+" "+Y(p[1]).toFixed(1)).join(" ");
+  let g="";
+  for(let i=0;i<=3;i++){const v=y0+(y1-y0)*(i/3),yy=Y(v);g+=`<line class="grid" x1="${pl}" x2="${W-pr+6}" y1="${yy}" y2="${yy}"/><text class="axis" x="${W-pr+10}" y="${yy+4}">${fmtAxis(v)}</text>`}
+  for(let i=0;i<=2;i++){const t=x0+(x1-x0)*(i/2),anchor=["start","middle","end"][i];g+=`<text class="axis" x="${X(t)}" y="${H-6}" text-anchor="${anchor}">${fmtT(t,range)}</text>`}
+  box.innerHTML=`<svg viewBox="0 0 ${W} ${H}">
+    <defs><linearGradient id="gf" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${up?"#34c77b":"#ff5c63"}" stop-opacity=".22"/><stop offset="1" stop-color="${up?"#34c77b":"#ff5c63"}" stop-opacity="0"/></linearGradient></defs>
+    ${g}<path d="${d} L${X(x1)} ${H-pb} L${X(x0)} ${H-pb} Z" fill="url(#gf)"/>
+    <path d="${d}" fill="none" stroke="${col}" stroke-width="2" stroke-linejoin="round"/>
+    <g id="cross" style="display:none"><line id="cl" y1="${pt}" y2="${H-pb}" stroke="var(--muted)" stroke-dasharray="3 3"/><circle id="cc" r="5" fill="${col}" stroke="var(--card)" stroke-width="2"/></g>
+  </svg>`;
+  setHead(ys[ys.length-1],ys[0]);
+  const svg=box.querySelector("svg"),cross=svg.querySelector("#cross");
+  const move=e=>{
+    const r=svg.getBoundingClientRect(),cx=(e.touches?e.touches[0].clientX:e.clientX)-r.left;
+    const t=x0+(cx-pl)/(W-pl-pr)*(x1-x0);
+    let i=0,b=Infinity;for(let k=0;k<xs.length;k++){const dd=Math.abs(xs[k]-t);if(dd<b){b=dd;i=k}}
+    cross.style.display="";svg.querySelector("#cl").setAttribute("x1",X(xs[i]));svg.querySelector("#cl").setAttribute("x2",X(xs[i]));
+    svg.querySelector("#cc").setAttribute("cx",X(xs[i]));svg.querySelector("#cc").setAttribute("cy",Y(ys[i]));
+    setHead(ys[i],ys[0]);$("dmeta").textContent=fmtFull(xs[i]);
+  };
+  const end=()=>{cross.style.display="none";setHead(ys[ys.length-1],ys[0]);$("dmeta").textContent=det.meta};
+  svg.addEventListener("pointermove",move);svg.addEventListener("pointerdown",move);
+  svg.addEventListener("touchmove",move,{passive:true});
+  svg.addEventListener("pointerleave",end);svg.addEventListener("touchend",end);
+}
+function fmtAxis(v){
+  const a=Math.abs(v),d=a>=1000?0:a>=10?2:a>=1?2:4;
+  return new Intl.NumberFormat("de-DE",{minimumFractionDigits:d,maximumFractionDigits:d}).format(v);
+}
+
+async function showRange(){
+  document.querySelectorAll("#dranges button").forEach(b=>b.classList.toggle("on",b.dataset.r===range));
+  $("dchart").innerHTML='<div class="msg">Lade …</div>';
+  const my=det;
+  try{
+    const pts=det.coin?await cryptoSeries(det.coin,range):await stockSeries(det.isin,range);
+    if(my===det)drawChart(pts);
+  }catch(e){if(my===det)$("dchart").innerHTML=`<div class="msg">Chart konnte nicht geladen werden (${e.message}).</div>`}
+}
+function openDetail(o){
+  det=o;$("dname").textContent=o.name;$("dsym").textContent=o.sym;$("dmeta").textContent=o.meta;
+  $("det").classList.add("open");document.body.style.overflow="hidden";
+  history.pushState({det:1},"");
+  showRange();
+}
+function closeDetail(){det=null;$("det").classList.remove("open");document.body.style.overflow=""}
+window.addEventListener("popstate",()=>{if(det)closeDetail()});
+$("dback").onclick=()=>history.back();
+$("dranges").onclick=e=>{const b=e.target.closest("button");if(!b||!det)return;range=b.dataset.r;showRange()};
+$("cards").onclick=e=>{
+  const el=e.target.closest("[data-coin]");if(!el)return;
+  const c=COINS.find(c=>c.id===el.dataset.coin),x=cryptoData.find(d=>d.id===c.id);
+  openDetail({coin:c.id,name:c.name,sym:c.sym,price:x&&x.current_price,meta:"Quelle: CoinGecko"});
+};
+$("stocks").onclick=e=>{
+  const el=e.target.closest("[data-isin]");if(!el||!quotes)return;
+  const x=quotes.items.find(i=>i.isin===el.dataset.isin);if(!x||x.price==null)return;
+  openDetail({isin:x.isin,name:x.name,sym:x.isin,price:conv(x.price,x.currency),meta:"Quelle: "+(x.source||"–")+(x.currency!==cur.toUpperCase()?" · umgerechnet aus "+x.currency:"")});
+};
+window.addEventListener("resize",()=>{if(det)showRange()});
 load();
 if("serviceWorker" in navigator && location.protocol==="https:")navigator.serviceWorker.register("sw.js").catch(()=>{});
 </script>

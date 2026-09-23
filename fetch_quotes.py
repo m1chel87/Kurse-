@@ -21,7 +21,16 @@ ASSETS = [
 ]
 
 OUT = "data/quotes.json"
-HIST_DAYS = 7
+CHARTS = "data/charts.json"
+HIST_DAYS = 7            # volle Auflösung (30 Min.) für eigene Historie
+HIST_KEEP_DAYS = 370     # ältere Punkte: 1 pro Tag
+# Chart-Zeiträume: Schlüssel -> (Yahoo-Periode, Intervall, behalten [s], max. Alter vor Neuabruf [s])
+CHART_SPECS = {
+    "d": ("5d", "5m", 86400, 0),
+    "w": ("1mo", "30m", 7 * 86400, 0),
+    "m": ("3mo", "1h", 31 * 86400, 6 * 3600),
+    "y": ("1y", "1d", None, 6 * 3600),
+}
 UA = {"User-Agent": "Mozilla/5.0 (kurs-dashboard)", "Accept": "application/json"}
 
 
@@ -45,7 +54,16 @@ def get_fx():
 
 
 # ---------- Yahoo ----------
-def from_yahoo(symbol):
+def _series(t, period, interval, keep):
+    h = t.history(period=period, interval=interval)
+    pts = [[int(ts.timestamp()), float(f"{float(v):.6g}")] for ts, v in h["Close"].dropna().items()]
+    if keep and pts:
+        cut = pts[-1][0] - keep
+        pts = [p for p in pts if p[0] >= cut]
+    return pts
+
+
+def from_yahoo(symbol, old_chart=None):
     import yfinance as yf
     t = yf.Ticker(symbol)
     fi = t.fast_info
@@ -54,14 +72,24 @@ def from_yahoo(symbol):
         raise ValueError("kein Kurs")
     prev = fi.previous_close
     cur = (fi.currency or "").upper()
-    seed = []
-    try:
-        h = t.history(period="7d", interval="1h")
-        seed = [[int(ts.timestamp()), round(float(v), 6)] for ts, v in h["Close"].dropna().items()]
-    except Exception as e:
-        log("  Yahoo-Historie fehlt", symbol, e)
+    now = int(time.time())
+    old_chart = old_chart if (old_chart or {}).get("src") == symbol else {}
+    fetched = dict(old_chart.get("fetched", {}))
+    chart = {"src": symbol, "fetched": fetched}
+    for k, (period, interval, keep, max_age) in CHART_SPECS.items():
+        if old_chart.get(k) and now - fetched.get(k, 0) < max_age:
+            chart[k] = old_chart[k]
+            continue
+        try:
+            chart[k] = _series(t, period, interval, keep)
+            fetched[k] = now
+        except Exception as e:
+            log("  Chart fehlt", symbol, k, e)
+            if old_chart.get(k):
+                chart[k] = old_chart[k]
     return {"price": float(price), "prev": float(prev) if prev else None,
-            "currency": cur, "time": int(time.time()), "source": f"Yahoo {symbol}", "seed": seed}
+            "currency": cur, "time": now, "source": f"Yahoo {symbol}",
+            "seed": chart.get("w", []), "chart": chart}
 
 
 # ---------- onvista (per ISIN) ----------
@@ -120,69 +148,105 @@ def from_onvista(isin):
                         "prev": float(prev) if isinstance(prev, (int, float)) else None,
                         "currency": (q.get("isoCurrency") or "EUR").upper(),
                         "time": ts, "source": "onvista " + ((q.get("market") or {}).get("name") or ""),
-                        "seed": [], "name": ent.get("name")}
+                        "seed": [], "chart": None, "name": ent.get("name")}
         except Exception as e:
             last_err = e
     raise ValueError(f"kein Kurs ({last_err})")
 
 
-def fetch(asset):
+def fetch(asset, old_chart=None):
     for sym in asset.get("yahoo", []):
         try:
-            return from_yahoo(sym)
+            return from_yahoo(sym, old_chart)
         except Exception as e:
             log("  Yahoo fehlgeschlagen", sym, e)
     return from_onvista(asset["isin"])
 
 
+def load_json(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def thin(hist, now):
+    """Letzte HIST_DAYS Tage voll, davor 1 Punkt pro Tag, max. HIST_KEEP_DAYS."""
+    recent_cut, keep_cut = now - HIST_DAYS * 86400, now - HIST_KEEP_DAYS * 86400
+    daily = {}
+    for p in hist:
+        if keep_cut <= p[0] < recent_cut:
+            daily[p[0] // 86400] = p
+    return sorted(daily.values()) + [p for p in hist if p[0] >= recent_cut]
+
+
+def own_chart(hist):
+    if not hist:
+        return {"src": "own"}
+    last = hist[-1][0]
+    return {"src": "own",
+            "d": [p for p in hist if p[0] >= last - 86400],
+            "w": [p for p in hist if p[0] >= last - 7 * 86400],
+            "m": [p for p in hist if p[0] >= last - 31 * 86400],
+            "y": hist}
+
+
+def write_json(path, data):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
+    log("geschrieben:", path)
+
+
 def main():
-    old = {}
-    if os.path.exists(OUT):
-        try:
-            old = json.load(open(OUT, encoding="utf-8"))
-        except Exception:
-            old = {}
+    old = load_json(OUT)
     old_items = {i["isin"]: i for i in old.get("items", [])}
+    old_charts = load_json(CHARTS).get("assets", {})
 
     fx = get_fx() or old.get("fx")
     now = int(time.time())
-    cutoff = now - HIST_DAYS * 86400
-    items, changed = [], False
+    items, charts, changed = [], {}, False
 
     for a in ASSETS:
-        log("→", a["isin"], a["name"])
-        prev_item = old_items.get(a["isin"], {})
+        isin = a["isin"]
+        log("→", isin, a["name"])
+        prev_item = old_items.get(isin, {})
         try:
-            q = fetch(a)
+            q = fetch(a, old_charts.get(isin))
         except Exception as e:
             log("  FEHLER:", e)
             if prev_item:
                 prev_item["stale"] = True
                 items.append(prev_item)
             else:
-                items.append({"isin": a["isin"], "name": a["name"], "error": str(e)})
+                items.append({"isin": isin, "name": a["name"], "error": str(e)})
+            if isin in old_charts:
+                charts[isin] = old_charts[isin]
             continue
 
-        hist = [p for p in prev_item.get("history", []) if p[0] >= cutoff]
+        hist = list(prev_item.get("history", []))
         if len(hist) < 10 and q["seed"]:
-            hist = [p for p in q["seed"] if p[0] >= cutoff]
+            hist = [p for p in q["seed"] if p[0] >= now - HIST_DAYS * 86400]
         if not hist or hist[-1][1] != round(q["price"], 6):
             hist.append([now, round(q["price"], 6)])
+        hist = thin(hist, now)
         if prev_item.get("price") != q["price"]:
             changed = True
 
-        items.append({"isin": a["isin"], "name": a["name"], "price": q["price"],
+        items.append({"isin": isin, "name": a["name"], "price": q["price"],
                       "prev": q["prev"], "currency": q["currency"], "time": q["time"],
                       "source": q["source"].strip(), "history": hist})
+        charts[isin] = q["chart"] or own_chart(hist)
         log(f"  {q['price']} {q['currency']} ({q['source']})")
 
+    new_charts = {"assets": charts}
+    if new_charts["assets"] != old_charts:
+        write_json(CHARTS, new_charts)
     if not changed and old and set(old_items) == {a["isin"] for a in ASSETS}:
-        log("Keine Kursänderung – nichts zu schreiben.")
+        log("Keine Kursänderung – quotes.json unverändert.")
         return
-    os.makedirs(os.path.dirname(OUT), exist_ok=True)
-    json.dump({"updated": now, "fx": fx, "items": items},
-              open(OUT, "w", encoding="utf-8"), ensure_ascii=False, separators=(",", ":"))
-    log("geschrieben:", OUT)
+    write_json(OUT, {"updated": now, "fx": fx, "items": items})
 
 
 if __name__ == "__main__":
