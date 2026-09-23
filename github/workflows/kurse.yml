@@ -1,0 +1,32 @@
+name: Kurse aktualisieren
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - fetch_quotes.py
+      - .github/workflows/kurse.yml
+permissions:
+  contents: write
+concurrency:
+  group: kurse
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install yfinance requests
+      - run: python fetch_quotes.py
+      - run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898208+github-actions[bot]@users.noreply.github.com"
+          git add data/
+          git diff --cached --quiet && exit 0
+          git commit -m "Kurse aktualisiert"
+          git pull --rebase
+          git push
