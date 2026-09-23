@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Kurse">
+<meta name="theme-color" content="#0f1115">
+<title>Kurs-Dashboard</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="icon" href="icon-192.png">
+<style>
+:root{--bg:#f4f5f7;--card:#fff;--text:#16181d;--muted:#6b7280;--line:#e5e7eb;--up:#0a8f5a;--down:#d0343a;--accent:#2563eb}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1115;--card:#181b22;--text:#eef0f4;--muted:#8b93a3;--line:#262a33;--up:#34c77b;--down:#ff5c63;--accent:#6ea0ff}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;padding:calc(env(safe-area-inset-top) + 16px) 16px calc(env(safe-area-inset-bottom) + 24px)}
+.wrap{max-width:520px;margin:0 auto}
+header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px}
+h1{font-size:22px;margin:0;letter-spacing:-.01em}
+.seg{display:flex;background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.seg button{border:0;background:none;color:var(--muted);font:600 14px inherit;font-family:inherit;padding:7px 12px;cursor:pointer}
+.seg button.on{background:var(--accent);color:#fff}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px;margin-bottom:12px}
+.top{display:flex;justify-content:space-between;align-items:flex-start;gap:8px}
+.name{font-weight:600}.sym{color:var(--muted);font-size:13px}
+.price{font-size:28px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-.02em;margin-top:6px}
+.chg{display:flex;gap:14px;font-size:14px;font-variant-numeric:tabular-nums;margin-top:2px}
+.chg span b{font-weight:600}.chg .l{color:var(--muted)}
+.up{color:var(--up)}.down{color:var(--down)}
+svg.spark{width:100%;height:56px;display:block;margin-top:10px}
+.foot{display:flex;justify-content:space-between;align-items:center;color:var(--muted);font-size:13px;margin-top:8px;gap:8px}
+.btn{border:1px solid var(--line);background:var(--card);color:var(--text);border-radius:10px;padding:8px 14px;font:600 14px inherit;font-family:inherit;cursor:pointer}
+.err{background:color-mix(in srgb,var(--down) 12%,transparent);color:var(--down);border-radius:12px;padding:10px 12px;font-size:14px;margin-bottom:12px;display:none}
+.skel{color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Kurse</h1>
+    <div class="seg" id="cur">
+      <button data-c="eur" class="on">EUR</button><button data-c="usd">USD</button>
+    </div>
+  </header>
+  <div class="err" id="err"></div>
+  <div id="cards"></div>
+  <div class="foot">
+    <div><div id="updated">Lade …</div><div id="next"></div></div>
+    <button class="btn" id="refresh">Aktualisieren</button>
+  </div>
+</div>
+<script>
+const COINS=[
+  {id:"bitcoin",name:"Bitcoin",sym:"BTC"},
+  {id:"ethereum",name:"Ethereum",sym:"ETH"},
+  {id:"tether-gold",name:"Tether Gold",sym:"XAUT · 1 oz Gold"}
+];
+const INTERVAL=30*60*1000;
+let cur="eur",lastFetch=0,timer=null;
+const $=id=>document.getElementById(id);
+
+function fmt(v){
+  const d=v<10?4:2;
+  return new Intl.NumberFormat("de-DE",{style:"currency",currency:cur.toUpperCase(),minimumFractionDigits:d,maximumFractionDigits:d}).format(v);
+}
+function pct(v){
+  if(v==null||isNaN(v))return '<b>–</b>';
+  const c=v>=0?"up":"down";
+  return `<b class="${c}">${v>=0?"+":""}${v.toFixed(2).replace(".",",")} %</b>`;
+}
+function spark(arr,up){
+  if(!arr||arr.length<2)return"";
+  const w=300,h=56,p=3,min=Math.min(...arr),max=Math.max(...arr),r=max-min||1;
+  const pts=arr.map((v,i)=>[(i/(arr.length-1))*w,h-p-((v-min)/r)*(h-2*p)]);
+  const d=pts.map((q,i)=>(i?"L":"M")+q[0].toFixed(1)+" "+q[1].toFixed(1)).join(" ");
+  const col=up?"var(--up)":"var(--down)";
+  return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-label="7-Tage-Verlauf">
+    <path d="${d} L${w} ${h} L0 ${h} Z" fill="${col}" opacity=".10"/>
+    <path d="${d}" fill="none" stroke="${col}" stroke-width="2" vector-effect="non-scaling-stroke" stroke-linejoin="round"/></svg>`;
+}
+function render(data){
+  $("cards").innerHTML=COINS.map(c=>{
+    const x=data.find(d=>d.id===c.id);
+    if(!x)return `<div class="card"><div class="name">${c.name}</div><div class="skel">keine Daten</div></div>`;
+    const c24=x.price_change_percentage_24h_in_currency,c7=x.price_change_percentage_7d_in_currency;
+    return `<div class="card">
+      <div class="top"><div><div class="name">${c.name}</div><div class="sym">${c.sym}</div></div></div>
+      <div class="price">${fmt(x.current_price)}</div>
+      <div class="chg"><span><span class="l">24 h </span>${pct(c24)}</span><span><span class="l">7 T </span>${pct(c7)}</span></div>
+      ${spark(x.sparkline_in_7d&&x.sparkline_in_7d.price,(c7??0)>=0)}
+    </div>`;
+  }).join("");
+}
+async function load(){
+  $("updated").textContent="Lade …";
+  const url=`https://api.coingecko.com/api/v3/coins/markets?vs_currency=${cur}&ids=${COINS.map(c=>c.id).join(",")}&sparkline=true&price_change_percentage=24h,7d`;
+  try{
+    const r=await fetch(url,{cache:"no-store"});
+    if(!r.ok)throw new Error("HTTP "+r.status);
+    const data=await r.json();
+    render(data);
+    lastFetch=Date.now();
+    $("err").style.display="none";
+    $("updated").textContent="Stand: "+new Date(lastFetch).toLocaleTimeString("de-DE",{hour:"2-digit",minute:"2-digit"})+" Uhr";
+  }catch(e){
+    $("err").textContent="Kurse konnten nicht geladen werden ("+e.message+"). Neuer Versuch in 1 Minute.";
+    $("err").style.display="block";
+    $("updated").textContent="Fehler beim Laden";
+    schedule(60*1000);return;
+  }
+  schedule(INTERVAL);
+}
+let nextAt=0;
+function schedule(ms){clearTimeout(timer);nextAt=Date.now()+ms;timer=setTimeout(load,ms)}
+setInterval(()=>{
+  if(!nextAt)return;
+  const s=Math.max(0,Math.round((nextAt-Date.now())/1000));
+  $("next").textContent="Nächste Aktualisierung in "+Math.floor(s/60)+":"+String(s%60).padStart(2,"0");
+},1000);
+// Handy war im Standby → beim Zurückkehren sofort nachladen, falls fällig
+document.addEventListener("visibilitychange",()=>{
+  if(document.visibilityState==="visible"&&Date.now()>=nextAt)load();
+});
+$("refresh").onclick=load;
+$("cur").onclick=e=>{
+  const b=e.target.closest("button");if(!b||b.dataset.c===cur)return;
+  cur=b.dataset.c;
+  document.querySelectorAll("#cur button").forEach(x=>x.classList.toggle("on",x===b));
+  load();
+};
+load();
+if("serviceWorker" in navigator && location.protocol==="https:")navigator.serviceWorker.register("sw.js").catch(()=>{});
+</script>
+</body>
+</html>
