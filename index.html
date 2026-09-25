@@ -65,6 +65,11 @@ svg.spark{width:100%;height:56px;display:block;margin-top:10px}
 .ranges{display:flex;gap:6px;margin-top:16px}
 .ranges button{flex:1;border:1px solid var(--line);background:var(--card);color:var(--muted);font:600 14px inherit;font-family:inherit;padding:10px 0;border-radius:10px;cursor:pointer}
 .ranges button.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:16px}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 12px;min-width:0}
+.stat .k{color:var(--muted);font-size:12px}
+.stat .v{font-weight:600;font-size:15px;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.stath{color:var(--muted);font-size:12px;margin:14px 2px -8px}
 .dmeta{color:var(--muted);font-size:13px;margin-top:14px}
 </style>
 </head>
@@ -95,6 +100,8 @@ svg.spark{width:100%;height:56px;display:block;margin-top:10px}
     <div class="ranges" id="dranges">
       <button data-r="h">Std.</button><button data-r="d">Tag</button><button data-r="w">Woche</button><button data-r="m">Monat</button><button data-r="y">Jahr</button>
     </div>
+    <div class="stath" id="dstath"></div>
+    <div class="stats" id="dstats"></div>
     <div class="dmeta" id="dmeta"></div>
   </div>
 </div>
@@ -175,7 +182,7 @@ $("cur").onclick=e=>{
   const b=e.target.closest("button");if(!b||b.dataset.c===cur)return;
   cur=b.dataset.c;
   document.querySelectorAll("#cur button").forEach(x=>x.classList.toggle("on",x===b));
-  load();renderQuotes();if(det)showRange();
+  load();renderQuotes();if(det){showRange();showStats()}
 };
 
 // ---------- Wertpapiere (data/quotes.json, alle 30 Min. per GitHub Actions) ----------
@@ -313,6 +320,25 @@ function fmtAxis(v){
   return new Intl.NumberFormat("de-DE",{minimumFractionDigits:d,maximumFractionDigits:d}).format(v);
 }
 
+async function showStats(){
+  const my=det;
+  const box=$("dstats");
+  const tile=(k,v)=>`<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`;
+  $("dstath").textContent=det.coin?"Letzte 24 Stunden":"Letzter Handelstag";
+  box.innerHTML=tile("Tagestief","…")+tile("Tageshoch","…")+tile("Ø Tag","…");
+  try{
+    let pts=det.coin?await cryptoSeries(det.coin,"d"):await stockSeries(det.isin,"d");
+    if(my!==det)return;
+    if(!det.coin&&pts.length){ // nur letzter Handelstag
+      const last=new Date(pts[pts.length-1][0]).toDateString();
+      pts=pts.filter(p=>new Date(p[0]).toDateString()===last);
+    }
+    if(!pts.length){box.innerHTML=tile("Tagestief","–")+tile("Tageshoch","–")+tile("Ø Tag","–");return}
+    const v=pts.map(p=>p[1]),avg=v.reduce((a,b)=>a+b,0)/v.length;
+    box.innerHTML=tile("Tagestief",fmt(Math.min(...v)))+tile("Tageshoch",fmt(Math.max(...v)))+tile("Ø Tag",fmt(avg));
+  }catch(e){if(my===det)box.innerHTML=tile("Tagestief","–")+tile("Tageshoch","–")+tile("Ø Tag","–")}
+}
+
 async function showRange(){
   document.querySelectorAll("#dranges button").forEach(b=>b.classList.toggle("on",b.dataset.r===range));
   $("dchart").innerHTML='<div class="msg">Lade …</div>';
@@ -326,7 +352,7 @@ function openDetail(o){
   det=o;det.key=o.coin||o.isin;range=RANGE_TXT[savedRanges[det.key]]?savedRanges[det.key]:"d";$("dname").textContent=o.name;$("dsym").textContent=o.sym;$("dmeta").textContent=o.meta;
   $("det").classList.add("open");document.body.style.overflow="hidden";
   history.pushState({det:1},"");
-  showRange();
+  showRange();showStats();
 }
 function closeDetail(){det=null;$("det").classList.remove("open");document.body.style.overflow=""}
 window.addEventListener("popstate",()=>{if(det)closeDetail()});
