@@ -226,6 +226,9 @@ loadQuotes();
 
 // ---------- Detailansicht ----------
 const RANGE_TXT={h:"1 Stunde",d:"24 Stunden",w:"7 Tage",m:"1 Monat",y:"1 Jahr"};
+const RKEY="kurse.ranges";
+let savedRanges={};try{savedRanges=JSON.parse(localStorage.getItem(RKEY))||{}}catch(e){}
+function saveRange(k,r){savedRanges[k]=r;try{localStorage.setItem(RKEY,JSON.stringify(savedRanges))}catch(e){}}
 let det=null,range="d",cryptoData=[],chartsJson=null,chartsAt=0;
 const ccache={};
 const _render=render;render=function(d){cryptoData=d;_render(d)};
@@ -320,7 +323,7 @@ async function showRange(){
   }catch(e){if(my===det)$("dchart").innerHTML=`<div class="msg">Chart konnte nicht geladen werden (${e.message}).</div>`}
 }
 function openDetail(o){
-  det=o;$("dname").textContent=o.name;$("dsym").textContent=o.sym;$("dmeta").textContent=o.meta;
+  det=o;det.key=o.coin||o.isin;range=RANGE_TXT[savedRanges[det.key]]?savedRanges[det.key]:"d";$("dname").textContent=o.name;$("dsym").textContent=o.sym;$("dmeta").textContent=o.meta;
   $("det").classList.add("open");document.body.style.overflow="hidden";
   history.pushState({det:1},"");
   showRange();
@@ -328,7 +331,7 @@ function openDetail(o){
 function closeDetail(){det=null;$("det").classList.remove("open");document.body.style.overflow=""}
 window.addEventListener("popstate",()=>{if(det)closeDetail()});
 $("dback").onclick=()=>history.back();
-$("dranges").onclick=e=>{const b=e.target.closest("button");if(!b||!det)return;range=b.dataset.r;showRange()};
+$("dranges").onclick=e=>{const b=e.target.closest("button");if(!b||!det)return;range=b.dataset.r;saveRange(det.key,range);showRange()};
 $("cards").onclick=e=>{
   const el=e.target.closest("[data-coin]");if(!el)return;
   const c=COINS.find(c=>c.id===el.dataset.coin),x=cryptoData.find(d=>d.id===c.id);
